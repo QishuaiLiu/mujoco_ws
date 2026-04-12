@@ -1,0 +1,126 @@
+<mujoco model="starter_quadruped">
+  <compiler angle="radian" autolimits="true"/>
+  <option timestep="0.002" gravity="0 0 -9.81" integrator="RK4"/>
+
+  <visual>
+    <headlight diffuse="0.6 0.6 0.6" ambient="0.25 0.25 0.25" specular="0.1 0.1 0.1"/>
+    <rgba haze="0.15 0.25 0.35 1"/>
+  </visual>
+
+  <asset>
+    <texture type="skybox" builtin="gradient" rgb1="0.85 0.92 1.0" rgb2="0.15 0.25 0.35" width="512" height="3072"/>
+    <texture name="ground_tex" type="2d" builtin="checker" rgb1="0.2 0.25 0.3" rgb2="0.12 0.16 0.2" width="512" height="512"/>
+    <material name="ground_mat" texture="ground_tex" texrepeat="6 6" reflectance="0.1"/>
+    <material name="body_mat" rgba="0.26 0.43 0.72 1"/>
+    <material name="leg_mat" rgba="0.2 0.2 0.22 1"/>
+    <material name="foot_mat" rgba="0.7 0.25 0.2 1"/>
+  </asset>
+
+  <default>
+    <geom condim="3" friction="0.9 0.05 0.02" solref="0.008 1" solimp="0.95 0.99 0.001"/>
+    <joint damping="2.0" armature="0.02"/>
+    <position kp="250"/>
+    <default class="abd">
+      <joint axis="1 0 0" range="-0.6 0.6"/>
+    </default>
+    <default class="pitch">
+      <joint axis="0 1 0" range="-1.5 1.0"/>
+    </default>
+    <default class="knee">
+      <joint axis="0 1 0" range="-2.2 -0.1"/>
+    </default>
+  </default>
+
+  <worldbody>
+    <light pos="0 0 2.5" dir="0 0 -1"/>
+    <geom name="ground" type="plane" pos="0 0 0" size="0 0 1" material="ground_mat"/>
+
+    <body name="base" pos="0 0 0.52">
+      <freejoint/>
+      <inertial pos="0 0 0" mass="8.5" diaginertia="0.12 0.32 0.35"/>
+      <geom name="torso" type="box" size="0.26 0.11 0.06" material="body_mat"/>
+
+      <body name="fl_hip" pos="0.24 0.11 0">
+        <joint name="fl_hip_abd" class="abd"/>
+        <geom type="sphere" size="0.03" material="leg_mat"/>
+        <body name="fl_upper" pos="0 0 0">
+          <joint name="fl_hip_pitch" class="pitch"/>
+          <geom type="capsule" fromto="0 0 0 0 0 -0.22" size="0.028" material="leg_mat"/>
+          <body name="fl_lower" pos="0 0 -0.22">
+            <joint name="fl_knee" class="knee"/>
+            <geom type="capsule" fromto="0 0 0 0 0 -0.24" size="0.024" material="leg_mat"/>
+            <body name="fl_foot" pos="0 0 -0.24">
+              <geom type="sphere" size="0.03" material="foot_mat"/>
+            </body>
+          </body>
+        </body>
+      </body>
+
+      <body name="fr_hip" pos="0.24 -0.11 0">
+        <joint name="fr_hip_abd" class="abd"/>
+        <geom type="sphere" size="0.03" material="leg_mat"/>
+        <body name="fr_upper" pos="0 0 0">
+          <joint name="fr_hip_pitch" class="pitch"/>
+          <geom type="capsule" fromto="0 0 0 0 0 -0.22" size="0.028" material="leg_mat"/>
+          <body name="fr_lower" pos="0 0 -0.22">
+            <joint name="fr_knee" class="knee"/>
+            <geom type="capsule" fromto="0 0 0 0 0 -0.24" size="0.024" material="leg_mat"/>
+            <body name="fr_foot" pos="0 0 -0.24">
+              <geom type="sphere" size="0.03" material="foot_mat"/>
+            </body>
+          </body>
+        </body>
+      </body>
+
+      <body name="rl_hip" pos="-0.24 0.11 0">
+        <joint name="rl_hip_abd" class="abd"/>
+        <geom type="sphere" size="0.03" material="leg_mat"/>
+        <body name="rl_upper" pos="0 0 0">
+          <joint name="rl_hip_pitch" class="pitch"/>
+          <geom type="capsule" fromto="0 0 0 0 0 -0.22" size="0.028" material="leg_mat"/>
+          <body name="rl_lower" pos="0 0 -0.22">
+            <joint name="rl_knee" class="knee"/>
+            <geom type="capsule" fromto="0 0 0 0 0 -0.24" size="0.024" material="leg_mat"/>
+            <body name="rl_foot" pos="0 0 -0.24">
+              <geom type="sphere" size="0.03" material="foot_mat"/>
+            </body>
+          </body>
+        </body>
+      </body>
+
+      <body name="rr_hip" pos="-0.24 -0.11 0">
+        <joint name="rr_hip_abd" class="abd"/>
+        <geom type="sphere" size="0.03" material="leg_mat"/>
+        <body name="rr_upper" pos="0 0 0">
+          <joint name="rr_hip_pitch" class="pitch"/>
+          <geom type="capsule" fromto="0 0 0 0 0 -0.22" size="0.028" material="leg_mat"/>
+          <body name="rr_lower" pos="0 0 -0.22">
+            <joint name="rr_knee" class="knee"/>
+            <geom type="capsule" fromto="0 0 0 0 0 -0.24" size="0.024" material="leg_mat"/>
+            <body name="rr_foot" pos="0 0 -0.24">
+              <geom type="sphere" size="0.03" material="foot_mat"/>
+            </body>
+          </body>
+        </body>
+      </body>
+    </body>
+  </worldbody>
+
+  <actuator>
+    <position name="fl_hip_abd_pos" joint="fl_hip_abd" ctrlrange="-0.6 0.6"/>
+    <position name="fl_hip_pitch_pos" joint="fl_hip_pitch" ctrlrange="-1.5 1.0"/>
+    <position name="fl_knee_pos" joint="fl_knee" ctrlrange="-2.2 -0.1"/>
+
+    <position name="fr_hip_abd_pos" joint="fr_hip_abd" ctrlrange="-0.6 0.6"/>
+    <position name="fr_hip_pitch_pos" joint="fr_hip_pitch" ctrlrange="-1.5 1.0"/>
+    <position name="fr_knee_pos" joint="fr_knee" ctrlrange="-2.2 -0.1"/>
+
+    <position name="rl_hip_abd_pos" joint="rl_hip_abd" ctrlrange="-0.6 0.6"/>
+    <position name="rl_hip_pitch_pos" joint="rl_hip_pitch" ctrlrange="-1.5 1.0"/>
+    <position name="rl_knee_pos" joint="rl_knee" ctrlrange="-2.2 -0.1"/>
+
+    <position name="rr_hip_abd_pos" joint="rr_hip_abd" ctrlrange="-0.6 0.6"/>
+    <position name="rr_hip_pitch_pos" joint="rr_hip_pitch" ctrlrange="-1.5 1.0"/>
+    <position name="rr_knee_pos" joint="rr_knee" ctrlrange="-2.2 -0.1"/>
+  </actuator>
+</mujoco>

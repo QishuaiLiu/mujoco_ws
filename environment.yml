@@ -1,0 +1,9 @@
+name: mujoco-quad
+channels:
+  - conda-forge
+dependencies:
+  - python=3.11
+  - pip
+  - numpy>=1.26
+  - pip:
+      - mujoco>=3.2
