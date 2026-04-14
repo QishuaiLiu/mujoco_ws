@@ -52,6 +52,8 @@ class Go2StandController:
         self.q_des = self.home_qpos[self.qpos_ids].copy()
         self.kp = np.array([35.0, 45.0, 45.0] * 4)
         self.kd = np.array([1.2, 1.5, 1.5] * 4)
+        self.last_tau = np.zeros_like(self.q_des)
+        self.step_count = 0
 
     def reset(self) -> None:
         self.data.qpos[:] = self.home_qpos
@@ -63,7 +65,15 @@ class Go2StandController:
         q = self.data.qpos[self.qpos_ids]
         qd = self.data.qvel[self.qvel_ids]
         tau = self.kp * (self.q_des - q) - self.kd * qd
+        self.last_tau = tau.copy()
         self.data.ctrl[:] = np.clip(tau, self.model.actuator_ctrlrange[:, 0], self.model.actuator_ctrlrange[:, 1])
+        self.step_count += 1
+
+    def desired_joint_map(self) -> list[tuple[str, float]]:
+        return [(name, float(value)) for name, value in zip(JOINT_NAMES, self.q_des)]
+
+    def torque_map(self) -> list[tuple[str, float]]:
+        return [(name, float(value)) for name, value in zip(JOINT_NAMES, self.last_tau)]
 
 
 def run_headless(model: mujoco.MjModel, data: mujoco.MjData, controller: Go2StandController, duration: float) -> None:
@@ -84,7 +94,12 @@ def run_headless(model: mujoco.MjModel, data: mujoco.MjData, controller: Go2Stan
     print(f"done duration={data.time:.2f} final_z={data.qpos[2]:.3f} min_z={min_height:.3f}")
 
 
-def run_viewer(model: mujoco.MjModel, data: mujoco.MjData, controller: Go2StandController) -> None:
+def run_viewer(
+    model: mujoco.MjModel,
+    data: mujoco.MjData,
+    controller: Go2StandController,
+    print_tau_every: int,
+) -> None:
     with mujoco.viewer.launch_passive(model, data) as viewer:
         viewer.cam.distance = 1.5
         viewer.cam.elevation = -18
@@ -93,6 +108,8 @@ def run_viewer(model: mujoco.MjModel, data: mujoco.MjData, controller: Go2StandC
         while viewer.is_running():
             controller.step()
             mujoco.mj_step(model, data)
+            if print_tau_every > 0 and controller.step_count % print_tau_every == 0:
+                print(f"t={data.time:.3f} tau={np.round(controller.last_tau, 4)}")
             viewer.sync()
 
 
@@ -100,6 +117,12 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Run the clean MuJoCo Menagerie Unitree Go2 model.")
     parser.add_argument("--headless", action="store_true", help="Run without opening the viewer.")
     parser.add_argument("--duration", type=float, default=5.0, help="Headless run duration in seconds.")
+    parser.add_argument(
+        "--print-tau-every",
+        type=int,
+        default=0,
+        help="Print torque command every N control steps. 0 disables repeated printing.",
+    )
     args = parser.parse_args()
 
     if not GO2_SCENE.exists():
@@ -110,10 +133,17 @@ def main() -> None:
     controller = Go2StandController(model, data)
     controller.reset()
 
+    print("Go2 desired joint targets (q_des):")
+    for joint_name, joint_value in controller.desired_joint_map():
+        print(f"  {joint_name}: {joint_value:.4f}")
+    print("Go2 initial torque command (tau):")
+    for joint_name, tau_value in controller.torque_map():
+        print(f"  {joint_name}: {tau_value:.4f}")
+
     if args.headless:
         run_headless(model, data, controller, args.duration)
     else:
-        run_viewer(model, data, controller)
+        run_viewer(model, data, controller, args.print_tau_every)
 
 
 if __name__ == "__main__":
