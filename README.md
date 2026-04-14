@@ -66,7 +66,25 @@ The default behavior is:
 1. reset into a stable standing pose
 2. hold the standing pose
 
-Use `--trot` to test the procedural trot. The trot is still experimental; the current stable baseline is standing.
+Use `--trot` to test the procedural trot. The trot is conservative and open-loop: it should avoid the quick fall-down behavior, but some yaw drift is expected because there is not yet a heading controller.
+
+## Run The Clean Unitree Go2 Model
+
+The Go2 model is vendored from Google DeepMind's MuJoCo Menagerie under `third_party/mujoco_menagerie/unitree_go2`.
+
+Headless load/control test:
+
+```bash
+python run_go2.py --headless --duration 5
+```
+
+Viewer:
+
+```bash
+python run_go2.py
+```
+
+This uses a simple joint-space PD torque controller around the Go2 `home` keyframe. It is only a standing test, not a walking controller.
 
 ## Notes
 

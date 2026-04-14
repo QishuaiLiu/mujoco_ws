@@ -56,11 +56,14 @@ class QuadrupedController:
         }
 
         self.stand_height = -0.42
-        self.stance_half_length = 0.02
-        self.gait_period = 0.55
-        self.step_height = 0.07
-        self.step_length = 0.12
-        self.startup_duration = 3.0
+        self.gait_period = 0.9
+        self.duty_factor = 0.72
+        self.step_height = 0.035
+        self.step_length = 0.045
+        self.startup_duration = 4.0
+        self.ramp_duration = 3.0
+        self.pitch_stabilization = 0.10
+        self.roll_stabilization = 0.06
         self.enable_trot = False
 
     def reset_pose(self) -> None:
@@ -80,13 +83,18 @@ class QuadrupedController:
 
     def _compute_joint_targets(self, time_now: float) -> dict[str, np.ndarray]:
         if self.enable_trot:
-            speed_scale = np.clip((time_now - self.startup_duration) / 1.0, 0.0, 1.0)
+            speed_scale = np.clip(
+                (time_now - self.startup_duration) / self.ramp_duration,
+                0.0,
+                1.0,
+            )
         else:
             speed_scale = 0.0
         targets: dict[str, np.ndarray] = {}
+        roll, pitch = self._base_roll_pitch()
 
         for leg in self.legs:
-            foot = self._desired_foot_position(leg, time_now, speed_scale)
+            foot = self._desired_foot_position(leg, time_now, speed_scale, roll, pitch)
             targets[leg.name] = leg_ik(foot, leg.is_left, self.geometry)
 
         return targets
@@ -96,27 +104,33 @@ class QuadrupedController:
         leg: LegConfig,
         time_now: float,
         speed_scale: float,
+        roll: float,
+        pitch: float,
     ) -> np.ndarray:
         if speed_scale <= 0.0:
             phase = 0.0
         else:
             phase = ((time_now / self.gait_period) + leg.phase) % 1.0
 
-        x = leg.hip_x
         y = leg.hip_y
         z = self.stand_height
 
         if speed_scale <= 0.0:
             return np.array([0.0, y, z], dtype=float)
 
-        if phase < 0.5:
-            stance_phase = phase / 0.5
+        if phase < self.duty_factor:
+            stance_phase = phase / self.duty_factor
             x_offset = (0.5 - stance_phase) * self.step_length
-            z_offset = 0.0
+            z_offset = -0.005
         else:
-            swing_phase = (phase - 0.5) / 0.5
+            swing_phase = (phase - self.duty_factor) / (1.0 - self.duty_factor)
             x_offset = (swing_phase - 0.5) * self.step_length
             z_offset = self.step_height * np.sin(np.pi * swing_phase)
+
+        # Crude body attitude feedback: move the feet under the falling torso.
+        x_offset += np.clip(self.pitch_stabilization * pitch, -0.035, 0.035)
+        y_offset = np.clip(self.roll_stabilization * roll, -0.025, 0.025)
+        y += y_offset
 
         return np.array([x_offset, y, z + speed_scale * z_offset], dtype=float)
 
@@ -129,3 +143,10 @@ class QuadrupedController:
             for joint_id, value in zip(self.joint_ids[leg.name], targets[leg.name]):
                 qpos_addr = self.model.jnt_qposadr[joint_id]
                 self.data.qpos[qpos_addr] = value
+
+    def _base_roll_pitch(self) -> tuple[float, float]:
+        w, x, y, z = self.data.qpos[3:7]
+        roll = np.arctan2(2.0 * (w * x + y * z), 1.0 - 2.0 * (x * x + y * y))
+        sin_pitch = np.clip(2.0 * (w * y - z * x), -1.0, 1.0)
+        pitch = np.arcsin(sin_pitch)
+        return float(roll), float(pitch)
