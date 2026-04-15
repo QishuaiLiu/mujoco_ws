@@ -75,6 +75,9 @@ class Go2StandController:
     def torque_map(self) -> list[tuple[str, float]]:
         return [(name, float(value)) for name, value in zip(JOINT_NAMES, self.last_tau)]
 
+    def format_torque_map(self) -> str:
+        return ", ".join(f"{name}={value:.4f}" for name, value in self.torque_map())
+
 
 def run_headless(model: mujoco.MjModel, data: mujoco.MjData, controller: Go2StandController, duration: float) -> None:
     steps = int(duration / model.opt.timestep)
@@ -109,7 +112,7 @@ def run_viewer(
             controller.step()
             mujoco.mj_step(model, data)
             if print_tau_every > 0 and controller.step_count % print_tau_every == 0:
-                print(f"t={data.time:.3f} tau={np.round(controller.last_tau, 4)}")
+                print(f"t={data.time:.3f} tau: {controller.format_torque_map()}")
             viewer.sync()
 
 
