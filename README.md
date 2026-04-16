@@ -86,6 +86,16 @@ python run_go2.py
 
 This uses a simple joint-space PD torque controller around the Go2 `home` keyframe. It is only a standing test, not a walking controller.
 
+## Verify Go2 Leg Kinematics
+
+This project also includes a small Go2 leg kinematics module and a verification script that compares its forward kinematics against MuJoCo's home pose:
+
+```bash
+python verify_go2_kinematics.py
+```
+
+This is the next bridge from joint-space control to foot-space control.
+
 ## Notes
 
 This is a starter controller, not a full whole-body controller.
