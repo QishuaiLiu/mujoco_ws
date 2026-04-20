@@ -86,6 +86,22 @@ python run_go2.py
 
 This uses a simple joint-space PD torque controller around the Go2 `home` keyframe. It is only a standing test, not a walking controller.
 
+## Run The Go2 Foot-Position Controller
+
+This variant keeps desired foot positions `p_des` in the base frame, uses IK to compute joint targets `q_des`, and then applies the same joint-space PD torque control underneath.
+
+Headless stand test:
+
+```bash
+python run_go2_foot_control.py --headless --duration 5
+```
+
+Try a small foot-space perturbation:
+
+```bash
+python run_go2_foot_control.py --headless --duration 5 --offset-foot FL 0.01 0 0
+```
+
 ## Verify Go2 Leg Kinematics
 
 This project also includes a small Go2 leg kinematics module and a verification script that compares its forward kinematics against MuJoCo's home pose:
