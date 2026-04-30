@@ -102,6 +102,12 @@ Try a small foot-space perturbation:
 python run_go2_foot_control.py --headless --duration 5 --offset-foot FL 0.01 0 0
 ```
 
+Try a simple scripted foot lift:
+
+```bash
+python run_go2_foot_control.py --headless --duration 2 --lift-foot FL --print-foot-every 100
+```
+
 ## Verify Go2 Leg Kinematics
 
 This project also includes a small Go2 leg kinematics module and a verification script that compares its forward kinematics against MuJoCo's home pose:

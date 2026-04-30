@@ -36,11 +36,40 @@ class Go2FootPositionController(Go2StandController):
             print(f"{leg_name} verse: {self.foot_body_ids[leg_name]}")
         ## convert q_pos to p_pos
         self.p_des_by_leg = {leg_name: GO2_LEGS[leg_name].forward(self.q_des[LEG_SLICES[leg_name]]) for leg_name in LEG_NAMES}
+        self.p_nominal_by_leg = {
+            leg_name: foot_position.copy() for leg_name, foot_position in self.p_des_by_leg.items()
+        }
+
+        self.lift_leg_name: str | None = None
+        self.lift_amplitude = 0.0
+        self.lift_frequency = 0.0
 
     def step(self) -> None:
+        self._update_scripted_foot_targets()
         self._update_joint_targets_from_feet()
         super().step()
 
+    def configure_lift_motion(self, leg_name: str, amplitude: float, frequency: float) -> None:
+        leg_name = leg_name.upper()
+        if leg_name not in self.p_des_by_leg:
+            raise KeyError(f"Unknown leg name: {leg_name}")
+        if amplitude < 0.0:
+            raise ValueError("Lift amplitude must be non-negative")
+        if frequency <= 0.0:
+            raise ValueError("Lift frequency must be positive")
+
+        self.lift_leg_name = leg_name
+        self.lift_amplitude = float(amplitude)
+        self.lift_frequency = float(frequency)
+
+    def _update_scripted_foot_targets(self) -> None:
+        if self.lift_leg_name is None:
+            return
+        phase = 2.0 * np.pi * self.lift_frequency * self.data.time
+        z_lift = 0.5 * self.lift_amplitude * (1.0 - np.cos(phase))
+        target = self.p_nominal_by_leg[self.lift_leg_name].copy()
+        target[2] += z_lift
+        self.p_des_by_leg[self.lift_leg_name] = target
     ## from current q pos to get the desired q pos and send it to controller to do a PD control
     def _update_joint_targets_from_feet(self) -> None:
         for leg_name in LEG_NAMES:
@@ -53,15 +82,16 @@ class Go2FootPositionController(Go2StandController):
         leg_name = leg_name.upper()
         if leg_name not in self.p_des_by_leg:
             raise KeyError(f"Unknown leg name: {leg_name}")
-        self.p_des_by_leg[leg_name] = self.p_des_by_leg[leg_name] + np.asarray(foot_position, dtype=float)
+        self.p_nominal_by_leg[leg_name] = np.asarray(foot_position, dtype=float).copy()
+        self.p_des_by_leg[leg_name] = self.p_nominal_by_leg[leg_name].copy()
 
 
     def offset_desired_foot_position(self, leg_name: str, foot_offset: np.ndarray) -> None:
         leg_name = leg_name.upper()
         if leg_name not in self.p_des_by_leg:
             raise KeyError(f"Unknown leg name: {leg_name}")
-
-        self.p_des_by_leg[leg_name] = self.p_des_by_leg[leg_name] + np.asarray(foot_offset, dtype=float)
+        self.p_nominal_by_leg[leg_name] = self.p_nominal_by_leg[leg_name] + np.asarray(foot_offset, dtype=float)
+        self.p_des_by_leg[leg_name] = self.p_nominal_by_leg[leg_name].copy()
 
     def desired_foot_map(self) -> list[tuple[str, np.ndarray]]:
         return [(leg_name, self.p_des_by_leg[leg_name].copy()) for leg_name in LEG_NAMES]
@@ -149,6 +179,13 @@ def main() ->None:
     parser.add_argument("--print-tau-every", type=int, default=0, help="Print torque command every N control steps. 0 disables repeated print.")
 
     parser.add_argument("--print-foot-every", type=int, default=0, help="Print foot trakcing error every N control steps. 0 disables repeated printing")
+
+    parser.add_argument("--lift-foot", choices=LEG_NAMES, help="Move one foot target up and down with a smooth cosine trajectory.", )
+
+    parser.add_argument("--lift-amplitude", type=float, default=0.02, help="Lift amplitude in meters for --lift-foot.", )
+
+    parser.add_argument("--lift-frequency", type=float, default=0.5, help="Lift frequency in Hz for --lift-foot.",)
+
     args = parser.parse_args()
 
     if not GO2_SCENE.exists():
@@ -162,6 +199,13 @@ def main() ->None:
         leg_name, dx, dy, dz = args.offset_foot
         controller.offset_desired_foot_position(leg_name, np.array([float(dx), float(dy), float(dz)], dtype=float),)
         controller.reset()
+
+    if args.lift_foot is not None:
+        controller.configure_lift_motion(
+            args.lift_foot,
+            args.lift_amplitude,
+            args.lift_frequency,
+        )
 
     print("Go2 actual foot position (p_actual in base frame):")
     for leg_name, foot_position in controller.actual_foot_map():
