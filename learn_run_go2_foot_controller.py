@@ -119,6 +119,28 @@ def run_headless_foot_control(model: mujoco.MjModel,
 
     print(f"done duration={data.time:.2f} final_z={data.qpos[2]:.3f} min_z={min_height:.3f}")
 
+def run_viewer_foot_control(
+    model: mujoco.MjModel,
+    data: mujoco.MjData,
+    controller: Go2FootPositionController,
+    print_tau_every: int,
+    print_foot_every: int,
+) -> None:
+    with mujoco.viewer.launch_passive(model, data) as viewer:
+        viewer.cam.distance = 1.5
+        viewer.cam.elevation = -18
+        viewer.cam.azimuth = 135
+
+        while viewer.is_running():
+            controller.step()
+            mujoco.mj_step(model, data)
+            if print_tau_every > 0 and controller.step_count % print_tau_every == 0:
+                print(f"t={data.time:.3f} tau: {controller.format_torque_map()}")
+            if print_foot_every > 0 and controller.step_count % print_foot_every == 0:
+                print(f"foot tracking t={data.time: .3f}")
+                print(controller.format_foot_tracking())
+            viewer.sync()
+
 def main() ->None:
     parser = argparse.ArgumentParser(description="Run the Go2 foot-position controller using IK + joint PD")
     parser.add_argument("--headless", action="store_true", help="Run without opening the viewer.")
@@ -164,7 +186,7 @@ def main() ->None:
         # run_headless(model, data, controller, args.duration)
         run_headless_foot_control(model, data, controller, args.duration, args.print_foot_every)
     else:
-        run_viewer(model, data, controller, args.print_tau_every)
+        run_viewer_foot_control(model, data, controller, args.print_tau_every, args.print_foot_every)
 
 if __name__ == "__main__":
     main()
