@@ -53,9 +53,13 @@ class Go2FootPositionController(Go2StandController):
         self.swing_amplitude = 0.0
         self.swing_frequency = 0.0
         self.swing_diagonal_name: str | None = None
+        self.stabilize_body = False
+        self.pitch_stabilization_gain = 0.08
+        self.roll_stabilizaztion_gain = 0.05
 
     def step(self) -> None:
         self._update_scripted_foot_targets()
+        self._apply_body_stabilization()
         self._update_joint_targets_from_feet()
         super().step()
 
@@ -110,7 +114,11 @@ class Go2FootPositionController(Go2StandController):
         self.swing_amplitude = float(amplitude)
         self.swing_frequency = float(frequency)
 
+    def configure_body_stabilization(self, enabled: bool) -> None:
+        self.stabilize_body = enabled
+
     def _update_scripted_foot_targets(self) -> None:
+        self._reset_desired_feet_to_nominal()
         if self.lift_leg_name is None:
             pass
         else:
@@ -147,6 +155,27 @@ class Go2FootPositionController(Go2StandController):
             q_current = self.data.qpos[self.qpos_ids[leg_slice]]
             self.q_des[leg_slice] = GO2_LEGS[leg_name].inverse(self.p_des_by_leg[leg_name], initial_guess=q_current,)
 
+    def _reset_desired_feet_to_nominal(self) -> None:
+        for leg_name in LEG_NAMES:
+            self.p_des_by_leg[leg_name] = self.p_nominal_by_leg[leg_name].copy()
+
+    def _apply_body_stabilization(self) -> None:
+        if not self.stabilize_body:
+            return
+        roll, pitch = self._base_roll_pitch()
+        x_shift = np.clip(self.pitch_stabilization_gain * pitch, -0.025, 0.025)
+        y_shift = np.clip(self.roll_stabilizaztion_gain * roll, -0.02, 0.02)
+
+        for leg_name in LEG_NAMES:
+            self.p_des_by_leg[leg_name][0] += x_shift
+            self.p_des_by_leg[leg_name][1] += y_shift
+
+    def _base_roll_pitch(self) -> tuple[float, float]:
+        w, x, y, z = self.data.qpos[3:7]
+        roll = np.arctan2(2.0 * (w * x + y * z), 1.0 - 2.0 * (x * x + y * y))
+        sin_pitch = np.clip(2.0 * (w * y - z * x), -1.0, 1.0)
+        pitch = np.arcsin(sin_pitch)
+        return float(roll), float(pitch)
 
     def set_desired_foot_position(self, leg_name: str, foot_position: np.ndarray) -> None:
         leg_name = leg_name.upper()
@@ -261,6 +290,8 @@ def main() ->None:
     parser.add_argument("--swing-length", type=float, default=0.04, help="Peak-to-peak swing length in meters for --swing-foot.")
     parser.add_argument("--swing-diagonal", choices=sorted(DIAGONAL_PAIRS), help="Move a diagonal foot pair with the same x-z swing trajectory.")
 
+    parser.add_argument("--no-stabilize-body", action="store_false", help="Disable simple roll/pitch foot-placement stabilization.")
+
     args = parser.parse_args()
 
     if not GO2_SCENE.exists():
@@ -269,6 +300,7 @@ def main() ->None:
     model = mujoco.MjModel.from_xml_path(str(GO2_SCENE))
     data = mujoco.MjData(model)
     controller = Go2FootPositionController(model, data)
+    controller.configure_body_stabilization(not args.no_stabilize_body)
 
     if args.offset_foot is not None:
         leg_name, dx, dy, dz = args.offset_foot

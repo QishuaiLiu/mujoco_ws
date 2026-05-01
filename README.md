@@ -120,6 +120,12 @@ Try a diagonal pair swing:
 python run_go2_foot_control.py --headless --duration 2 --swing-diagonal FL_RR --print-foot-every 100
 ```
 
+The foot-control runner applies a small roll/pitch stabilization by default. To compare against the open-loop behavior:
+
+```bash
+python run_go2_foot_control.py --headless --duration 2 --swing-diagonal FL_RR --no-stabilize-body
+```
+
 ## Verify Go2 Leg Kinematics
 
 This project also includes a small Go2 leg kinematics module and a verification script that compares its forward kinematics against MuJoCo's home pose:
