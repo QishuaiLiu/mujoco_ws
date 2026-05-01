@@ -114,6 +114,12 @@ Try a simple scripted foot swing:
 python run_go2_foot_control.py --headless --duration 2 --swing-foot FL --print-foot-every 100
 ```
 
+Try a diagonal pair swing:
+
+```bash
+python run_go2_foot_control.py --headless --duration 2 --swing-diagonal FL_RR --print-foot-every 100
+```
+
 ## Verify Go2 Leg Kinematics
 
 This project also includes a small Go2 leg kinematics module and a verification script that compares its forward kinematics against MuJoCo's home pose:

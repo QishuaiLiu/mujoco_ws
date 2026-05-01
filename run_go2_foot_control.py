@@ -11,6 +11,10 @@ from run_go2 import GO2_SCENE, JOINT_NAMES, Go2StandController
 
 
 LEG_NAMES = ["FL", "FR", "RL", "RR"]
+DIAGONAL_PAIRS = {
+    "FL_RR": ("FL", "RR"),
+    "FR_RL": ("FR", "RL"),
+}
 LEG_SLICES = {
     "FL": slice(0, 3),
     "FR": slice(3, 6),
@@ -49,6 +53,7 @@ class Go2FootPositionController(Go2StandController):
         self.swing_length = 0.0
         self.swing_amplitude = 0.0
         self.swing_frequency = 0.0
+        self.swing_diagonal_name: str | None = None
 
     def step(self) -> None:
         self._update_scripted_foot_targets()
@@ -88,6 +93,27 @@ class Go2FootPositionController(Go2StandController):
         self.swing_amplitude = float(amplitude)
         self.swing_frequency = float(frequency)
 
+    def configure_diagonal_swing_motion(
+        self,
+        diagonal_name: str,
+        length: float,
+        amplitude: float,
+        frequency: float,
+    ) -> None:
+        diagonal_name = diagonal_name.upper()
+        if diagonal_name not in DIAGONAL_PAIRS:
+            raise KeyError(f"Unknown diagonal pair: {diagonal_name}")
+        if length < 0.0:
+            raise ValueError("Swing length must be non-negative")
+        if amplitude < 0.0:
+            raise ValueError("Swing amplitude must be non-negative")
+        if frequency <= 0.0:
+            raise ValueError("Swing frequency must be positive")
+        self.swing_diagonal_name = diagonal_name
+        self.swing_length = float(length)
+        self.swing_amplitude = float(amplitude)
+        self.swing_frequency = float(frequency)
+
     def _update_scripted_foot_targets(self) -> None:
         if self.lift_leg_name is None:
             pass
@@ -98,15 +124,21 @@ class Go2FootPositionController(Go2StandController):
             target[2] += z_lift
             self.p_des_by_leg[self.lift_leg_name] = target
 
-        if self.swing_leg_name is None:
+        if self.swing_leg_name is None and self.swing_diagonal_name is None:
             return
         phase = 2.0 * np.pi * self.swing_frequency * self.data.time
         x_swing = 0.5 * self.swing_length * np.sin(phase)
         z_lift = 0.5 * self.swing_amplitude * (1.0 - np.cos(phase))
-        target = self.p_nominal_by_leg[self.swing_leg_name].copy()
-        target[0] += x_swing
-        target[2] += z_lift
-        self.p_des_by_leg[self.swing_leg_name] = target
+        swing_legs = []
+        if self.swing_leg_name is not None:
+            swing_legs.append(self.swing_leg_name)
+        if self.swing_diagonal_name is not None:
+            swing_legs.extend(DIAGONAL_PAIRS[self.swing_diagonal_name])
+        for leg_name in swing_legs:
+            target = self.p_nominal_by_leg[leg_name].copy()
+            target[0] += x_swing
+            target[2] += z_lift
+            self.p_des_by_leg[leg_name] = target
 
     def _update_joint_targets_from_feet(self) -> None:
         for leg_name in LEG_NAMES:
@@ -263,6 +295,11 @@ def main() -> None:
         help="Peak-to-peak swing length in meters for --swing-foot.",
     )
     parser.add_argument(
+        "--swing-diagonal",
+        choices=sorted(DIAGONAL_PAIRS),
+        help="Move a diagonal foot pair with the same x-z swing trajectory.",
+    )
+    parser.add_argument(
         "--print-tau-every",
         type=int,
         default=0,
@@ -298,6 +335,13 @@ def main() -> None:
     if args.swing_foot is not None:
         controller.configure_swing_motion(
             args.swing_foot,
+            args.swing_length,
+            args.lift_amplitude,
+            args.lift_frequency,
+        )
+    if args.swing_diagonal is not None:
+        controller.configure_diagonal_swing_motion(
+            args.swing_diagonal,
             args.swing_length,
             args.lift_amplitude,
             args.lift_frequency,
