@@ -120,6 +120,12 @@ Try a diagonal pair swing:
 python run_go2_foot_control.py --headless --duration 2 --swing-diagonal FL_RR --print-foot-every 100
 ```
 
+Try alternating diagonal pairs:
+
+```bash
+python run_go2_foot_control.py --headless --duration 4 --alternate-diagonal --print-foot-every 500
+```
+
 The foot-control runner applies a small roll/pitch stabilization by default. To compare against the open-loop behavior:
 
 ```bash

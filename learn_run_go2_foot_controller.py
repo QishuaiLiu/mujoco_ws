@@ -53,6 +53,7 @@ class Go2FootPositionController(Go2StandController):
         self.swing_amplitude = 0.0
         self.swing_frequency = 0.0
         self.swing_diagonal_name: str | None = None
+        self.alternate_diagonal_swing = False
         self.stabilize_body = False
         self.pitch_stabilization_gain = 0.08
         self.roll_stabilizaztion_gain = 0.05
@@ -117,6 +118,24 @@ class Go2FootPositionController(Go2StandController):
     def configure_body_stabilization(self, enabled: bool) -> None:
         self.stabilize_body = enabled
 
+    def configue_alternating_diangonal_swing(
+        self,
+                length: float,
+                amplitude: float,
+                frequency: float,
+    ) -> None:
+        if length < 0.0:
+            raise ValueError("Swing length must be non-negative")
+        if amplitude < 0.0:
+            raise ValueError("Swing amplitude must be non-negative")
+        if frequency <= 0.0:
+            raise ValueError("Swing frequency must be non-negative")
+
+        self.alternate_diagonal_swing = True
+        self.swing_length = float(length)
+        self.swing_amplitude = float(amplitude)
+        self.swing_frequency = float(frequency)
+
     def _update_scripted_foot_targets(self) -> None:
         self._reset_desired_feet_to_nominal()
         if self.lift_leg_name is None:
@@ -128,8 +147,26 @@ class Go2FootPositionController(Go2StandController):
             target[2] += z_lift
             self.p_des_by_leg[self.lift_leg_name] = target
 
-        if self.swing_leg_name is None and self.swing_diagonal_name is None:
+        if (self.swing_leg_name is None and self.swing_diagonal_name is None and not self.alternate_diagonal_swing):
             return
+        
+        if self.alternate_diagonal_swing:
+            cycle_phase = (self.swing_frequency * self.data.time) % 1.0
+            if cycle_phase < 0.5:
+                swing_legs = DIAGONAL_PAIRS["FL_RR"]
+                local_phase = cycle_phase / 0.5
+            else:
+                swing_legs = DIAGONAL_PAIRS["FR_RL"]
+                local_phase = (cycle_phase - 0.5) / 0.5
+            x_swing = self.swing_length * (local_phase - 0.5)
+            z_lift = self.swing_amplitude * np.sin(np.pi * local_phase)
+            for leg_name in swing_legs:
+                target = self.p_nominal_by_leg[leg_name].copy()
+                target[0] += x_swing
+                target[2] += z_lift
+                self.p_des_by_leg[leg_name] = target
+            return
+
         phase = 2.0 * np.pi * self.swing_frequency * self.data.time
         x_swing = 0.5 * self.swing_length * np.sin(phase)
         z_lift = 0.5 * self.swing_amplitude * (1.0 - np.cos(phase))
@@ -292,6 +329,8 @@ def main() ->None:
 
     parser.add_argument("--no-stabilize-body", action="store_false", help="Disable simple roll/pitch foot-placement stabilization.")
 
+    parser.add_argument("--alternate-diagonal", action="store_true", help="Alternate the swing phase between FL+RR and FR +RL.")
+
     args = parser.parse_args()
 
     if not GO2_SCENE.exists():
@@ -324,6 +363,12 @@ def main() ->None:
     if args.swing_diagonal is not None:
         controller.configure_diagnal_swing_motion(
             args.swing_diagonal,
+            args.swing_length,
+            args.lift_amplitude,
+            args.lift_frequency,
+        )
+    if args.alternate_diagonal:
+        controller.configue_alternating_diangonal_swing(
             args.swing_length,
             args.lift_amplitude,
             args.lift_frequency,
