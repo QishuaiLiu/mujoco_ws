@@ -126,6 +126,18 @@ Try alternating diagonal pairs:
 python run_go2_foot_control.py --headless --duration 4 --alternate-diagonal --print-foot-every 500
 ```
 
+Try a simple open-loop forward trot:
+
+```bash
+python run_go2_foot_control.py --headless --duration 4 --trot-forward --step-length 0.06 --step-height 0.025 --gait-frequency 0.5 --print-foot-every 500
+```
+
+Viewer version with a larger visible gait and base-position logging:
+
+```bash
+python run_go2_foot_control.py --trot-forward --step-length 0.10 --step-height 0.035 --gait-frequency 0.5 --print-base-every 500
+```
+
 The foot-control runner applies a small roll/pitch stabilization by default. To compare against the open-loop behavior:
 
 ```bash

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import time
 
 import mujoco
 import mujoco.viewer
@@ -14,6 +15,12 @@ LEG_NAMES = ["FL", "FR", "RL", "RR"]
 DIAGONAL_PAIRS = {
     "FL_RR": ("FL", "RR"),
     "FR_RL": ("FR", "RL"),
+}
+TROT_PHASE_OFFSETS = {
+    "FL": 0.0,
+    "RR": 0.0,
+    "FR": 0.5,
+    "RL": 0.5,
 }
 LEG_SLICES = {
     "FL": slice(0, 3),
@@ -55,6 +62,11 @@ class Go2FootPositionController(Go2StandController):
         self.swing_frequency = 0.0
         self.swing_diagonal_name: str | None = None
         self.alternate_diagonal_swing = False
+        self.trot_forward_enabled = False
+        self.trot_step_length = 0.0
+        self.trot_step_height = 0.0
+        self.trot_frequency = 0.0
+        self.trot_swing_fraction = 0.5
         self.stabilize_body = False
         self.pitch_stabilization_gain = 0.08
         self.roll_stabilization_gain = 0.05
@@ -136,11 +148,36 @@ class Go2FootPositionController(Go2StandController):
         self.swing_amplitude = float(amplitude)
         self.swing_frequency = float(frequency)
 
+    def configure_forward_trot(
+        self,
+        step_length: float,
+        step_height: float,
+        frequency: float,
+        swing_fraction: float = 0.5,
+    ) -> None:
+        if step_length < 0.0:
+            raise ValueError("Step length must be non-negative")
+        if step_height < 0.0:
+            raise ValueError("Step height must be non-negative")
+        if frequency <= 0.0:
+            raise ValueError("Trot frequency must be positive")
+        if not 0.0 < swing_fraction < 1.0:
+            raise ValueError("Swing fraction must be between 0 and 1")
+        self.trot_forward_enabled = True
+        self.trot_step_length = float(step_length)
+        self.trot_step_height = float(step_height)
+        self.trot_frequency = float(frequency)
+        self.trot_swing_fraction = float(swing_fraction)
+
     def configure_body_stabilization(self, enabled: bool) -> None:
         self.stabilize_body = enabled
 
     def _update_scripted_foot_targets(self) -> None:
         self._reset_desired_feet_to_nominal()
+        if self.trot_forward_enabled:
+            self._update_forward_trot_targets()
+            return
+
         if self.lift_leg_name is None:
             pass
         else:
@@ -188,6 +225,27 @@ class Go2FootPositionController(Go2StandController):
             target[0] += x_swing
             target[2] += z_lift
             self.p_des_by_leg[leg_name] = target
+
+    def _update_forward_trot_targets(self) -> None:
+        gait_phase = (self.trot_frequency * self.data.time) % 1.0
+        for leg_name in LEG_NAMES:
+            leg_phase = (gait_phase + TROT_PHASE_OFFSETS[leg_name]) % 1.0
+            x_offset, z_offset = self._forward_trot_foot_offset(leg_phase)
+            target = self.p_nominal_by_leg[leg_name].copy()
+            target[0] += x_offset
+            target[2] += z_offset
+            self.p_des_by_leg[leg_name] = target
+
+    def _forward_trot_foot_offset(self, leg_phase: float) -> tuple[float, float]:
+        if leg_phase < self.trot_swing_fraction:
+            swing_progress = leg_phase / self.trot_swing_fraction
+            x_offset = self.trot_step_length * (swing_progress - 0.5)
+            z_offset = self.trot_step_height * np.sin(np.pi * swing_progress)
+            return float(x_offset), float(z_offset)
+
+        stance_progress = (leg_phase - self.trot_swing_fraction) / (1.0 - self.trot_swing_fraction)
+        x_offset = self.trot_step_length * (0.5 - stance_progress)
+        return float(x_offset), 0.0
 
     def _reset_desired_feet_to_nominal(self) -> None:
         for leg_name in LEG_NAMES:
@@ -285,6 +343,7 @@ def run_headless_foot_control(
 ) -> None:
     steps = int(duration / model.opt.timestep)
     min_height = float("inf")
+    start_xy = data.qpos[0:2].copy()
 
     for step in range(steps):
         controller.step()
@@ -293,7 +352,7 @@ def run_headless_foot_control(
 
         if step % max(1, steps // 10) == 0:
             print(
-                f"t={data.time:.2f} z={data.qpos[2]:.3f} "
+                f"t={data.time:.2f} x={data.qpos[0]:.3f} y={data.qpos[1]:.3f} z={data.qpos[2]:.3f} "
                 f"quat={np.round(data.qpos[3:7], 3)}"
             )
 
@@ -301,7 +360,12 @@ def run_headless_foot_control(
             print(f"foot tracking t={data.time:.3f}")
             print(controller.format_foot_tracking())
 
-    print(f"done duration={data.time:.2f} final_z={data.qpos[2]:.3f} min_z={min_height:.3f}")
+    displacement_xy = data.qpos[0:2] - start_xy
+    print(
+        f"done duration={data.time:.2f} "
+        f"dx={displacement_xy[0]:.3f} dy={displacement_xy[1]:.3f} "
+        f"final_z={data.qpos[2]:.3f} min_z={min_height:.3f}"
+    )
 
 
 def run_viewer_foot_control(
@@ -310,21 +374,35 @@ def run_viewer_foot_control(
     controller: Go2FootPositionController,
     print_tau_every: int,
     print_foot_every: int,
+    print_base_every: int,
 ) -> None:
     with mujoco.viewer.launch_passive(model, data) as viewer:
         viewer.cam.distance = 1.5
         viewer.cam.elevation = -18
         viewer.cam.azimuth = 135
+        start_xy = data.qpos[0:2].copy()
+        sim_start = data.time
+        wall_start = time.perf_counter()
 
         while viewer.is_running():
             controller.step()
             mujoco.mj_step(model, data)
+            if print_base_every > 0 and controller.step_count % print_base_every == 0:
+                displacement_xy = data.qpos[0:2] - start_xy
+                print(
+                    f"base t={data.time:.3f} "
+                    f"x={data.qpos[0]:.3f} y={data.qpos[1]:.3f} z={data.qpos[2]:.3f} "
+                    f"dx={displacement_xy[0]:.3f} dy={displacement_xy[1]:.3f}"
+                )
             if print_tau_every > 0 and controller.step_count % print_tau_every == 0:
                 print(f"t={data.time:.3f} tau: {controller.format_torque_map()}")
             if print_foot_every > 0 and controller.step_count % print_foot_every == 0:
                 print(f"foot tracking t={data.time:.3f}")
                 print(controller.format_foot_tracking())
             viewer.sync()
+            sleep_time = (data.time - sim_start) - (time.perf_counter() - wall_start)
+            if sleep_time > 0.0:
+                time.sleep(min(sleep_time, 0.01))
 
 
 def main() -> None:
@@ -376,6 +454,35 @@ def main() -> None:
         help="Alternate the swing phase between FL+RR and FR+RL.",
     )
     parser.add_argument(
+        "--trot-forward",
+        action="store_true",
+        help="Run an open-loop forward trot with swing and stance foot motion.",
+    )
+    parser.add_argument(
+        "--step-length",
+        type=float,
+        default=0.06,
+        help="Peak-to-peak x motion in meters for --trot-forward.",
+    )
+    parser.add_argument(
+        "--step-height",
+        type=float,
+        default=0.025,
+        help="Foot lift height in meters for --trot-forward.",
+    )
+    parser.add_argument(
+        "--gait-frequency",
+        type=float,
+        default=0.5,
+        help="Gait cycle frequency in Hz for --trot-forward.",
+    )
+    parser.add_argument(
+        "--swing-fraction",
+        type=float,
+        default=0.5,
+        help="Fraction of each gait cycle spent in swing for --trot-forward.",
+    )
+    parser.add_argument(
         "--print-tau-every",
         type=int,
         default=0,
@@ -386,6 +493,12 @@ def main() -> None:
         type=int,
         default=0,
         help="Print foot tracking every N control steps. 0 disables repeated printing.",
+    )
+    parser.add_argument(
+        "--print-base-every",
+        type=int,
+        default=0,
+        help="Print base position every N control steps in viewer mode. 0 disables repeated printing.",
     )
     parser.add_argument(
         "--no-stabilize-body",
@@ -434,6 +547,13 @@ def main() -> None:
             args.lift_amplitude,
             args.lift_frequency,
         )
+    if args.trot_forward:
+        controller.configure_forward_trot(
+            args.step_length,
+            args.step_height,
+            args.gait_frequency,
+            args.swing_fraction,
+        )
 
     controller.reset()
 
@@ -472,6 +592,7 @@ def main() -> None:
             controller,
             args.print_tau_every,
             args.print_foot_every,
+            args.print_base_every,
         )
 
 
