@@ -4,17 +4,18 @@ import argparse
 import time
 
 import mujoco
+import mujoco.viewer
 import numpy as np
 
 from quadruped_mj.go2_kinematics import GO2_LEGS
-from run_go2 import GO2_SCENE, JOINT_NAMES, Go2StandController, run_headless, run_viewer
+from run_go2 import GO2_SCENE, JOINT_NAMES, Go2StandController
 
 LEG_NAMES = ["FL", "FR", "RL", "RR"]
 DIAGONAL_PAIRS = {
     "FL_RR": ("FL", "RR"),
     "FR_RL": ("FR", "RL"),
 }
-TORT_PHASE_OFFSETS = {
+TROT_PHASE_OFFSETS = {
     "FL": 0.0,
     "RR": 0.0,
     "FR": 0.5,
@@ -50,12 +51,9 @@ class Go2FootPositionController(Go2StandController):
             for leg_name in LEG_NAMES
         }
         self.foot_geom_ids = {
-            leg_name: mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, FOOT_BODIES[leg_name]) for leg_name in LEG_NAMES
+            leg_name: mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_GEOM, FOOT_GEOMS[leg_name]) for leg_name in LEG_NAMES
         }
         self.geom_id_to_leg = {geom_id: leg for leg, geom_id in self.foot_geom_ids.items()}
-        print(f"self.base_body_id {self.base_body_id}")
-        for leg_name in self.foot_body_ids:
-            print(f"{leg_name} verse: {self.foot_body_ids[leg_name]}")
         ## convert q_pos to p_pos
         self.p_des_by_leg = {leg_name: GO2_LEGS[leg_name].forward(self.q_des[LEG_SLICES[leg_name]]) for leg_name in LEG_NAMES}
         self.p_nominal_by_leg = {
@@ -65,8 +63,7 @@ class Go2FootPositionController(Go2StandController):
         self.lift_leg_name: str | None = None
         self.lift_amplitude = 0.0
         self.lift_frequency = 0.0
-        self.lift_frequency = 0.0
-        self.swing_leg_name: str  | None = None
+        self.swing_leg_name: str | None = None
         self.swing_length = 0.0
         self.swing_amplitude = 0.0
         self.swing_frequency = 0.0
@@ -75,11 +72,11 @@ class Go2FootPositionController(Go2StandController):
         self.trot_forward_enabled = False
         self.trot_step_length = 0.0
         self.trot_step_height = 0.0
-        self.trot_frequency = 0.5
+        self.trot_frequency = 0.0
         self.trot_swing_fraction = 0.5
         self.stabilize_body = False
         self.pitch_stabilization_gain = 0.08
-        self.roll_stabilizaztion_gain = 0.05
+        self.roll_stabilization_gain = 0.05
 
     def step(self) -> None:
         self._update_scripted_foot_targets()
@@ -105,10 +102,10 @@ class Go2FootPositionController(Go2StandController):
         if leg_name not in self.p_des_by_leg:
             raise KeyError(f"Unknown leg name: {leg_name}")
         if length < 0.0:
-            raise ValueError("Swing legnth must be non-negative")
+            raise ValueError("Swing length must be non-negative")
         if amplitude < 0.0:
             raise ValueError("Swing amplitude must be non-negative")
-        if frequency < 0.0:
+        if frequency <= 0.0:
             raise ValueError("Swing frequency must be positive")
 
         self.swing_leg_name = leg_name
@@ -116,7 +113,7 @@ class Go2FootPositionController(Go2StandController):
         self.swing_amplitude = float(amplitude)
         self.swing_frequency = float(frequency)
 
-    def configure_diagnal_swing_motion(
+    def configure_diagonal_swing_motion(
         self,
                 diagonal_name: str,
                 length: float,
@@ -127,12 +124,11 @@ class Go2FootPositionController(Go2StandController):
         if diagonal_name not in DIAGONAL_PAIRS:
             raise KeyError(f"Unknown diagonal pair: {diagonal_name}")
         if length < 0.0:
-            raise KeyError("Swing length must be non-negative")
+            raise ValueError("Swing length must be non-negative")
         if amplitude < 0.0:
             raise ValueError("Swing amplitude must be non-negative")
-
         if frequency <= 0.0:
-            raise ValueError("Swing frequency must be non-negative")
+            raise ValueError("Swing frequency must be positive")
         self.swing_diagonal_name = diagonal_name
         self.swing_length = float(length)
         self.swing_amplitude = float(amplitude)
@@ -141,7 +137,7 @@ class Go2FootPositionController(Go2StandController):
     def configure_body_stabilization(self, enabled: bool) -> None:
         self.stabilize_body = enabled
 
-    def configue_alternating_diangonal_swing(
+    def configure_alternating_diagonal_swing(
         self,
                 length: float,
                 amplitude: float,
@@ -152,7 +148,7 @@ class Go2FootPositionController(Go2StandController):
         if amplitude < 0.0:
             raise ValueError("Swing amplitude must be non-negative")
         if frequency <= 0.0:
-            raise ValueError("Swing frequency must be non-negative")
+            raise ValueError("Swing frequency must be positive")
 
         self.alternate_diagonal_swing = True
         self.swing_length = float(length)
@@ -196,7 +192,7 @@ class Go2FootPositionController(Go2StandController):
 
         if (self.swing_leg_name is None and self.swing_diagonal_name is None and not self.alternate_diagonal_swing):
             return
-        
+
         if self.alternate_diagonal_swing:
             cycle_phase = (self.swing_frequency * self.data.time) % 1.0
             if cycle_phase < 0.5:
@@ -217,9 +213,6 @@ class Go2FootPositionController(Go2StandController):
         phase = 2.0 * np.pi * self.swing_frequency * self.data.time
         x_swing = 0.5 * self.swing_length * np.sin(phase)
         z_lift = 0.5 * self.swing_amplitude * (1.0 - np.cos(phase))
-        # target = self.p_nominal_by_leg[self.swing_leg_name].copy()
-        # target[0] += x_swing
-        # target[2] += z_lift
         swing_legs = []
         if self.swing_leg_name is not None:
             swing_legs.append(self.swing_leg_name)
@@ -248,7 +241,7 @@ class Go2FootPositionController(Go2StandController):
             return
         roll, pitch = self._base_roll_pitch()
         x_shift = np.clip(self.pitch_stabilization_gain * pitch, -0.025, 0.025)
-        y_shift = np.clip(self.roll_stabilizaztion_gain * roll, -0.02, 0.02)
+        y_shift = np.clip(self.roll_stabilization_gain * roll, -0.02, 0.02)
 
         for leg_name in LEG_NAMES:
             self.p_des_by_leg[leg_name][0] += x_shift
@@ -257,7 +250,7 @@ class Go2FootPositionController(Go2StandController):
     def _update_forward_trot_targets(self) -> None:
         gait_phase = (self.trot_frequency * self.data.time) % 1.0
         for leg_name in LEG_NAMES:
-            leg_phase = (gait_phase + TORT_PHASE_OFFSETS[leg_name]) % 1.0
+            leg_phase = (gait_phase + TROT_PHASE_OFFSETS[leg_name]) % 1.0
             x_offset, z_offset = self._forward_trot_foot_offset(leg_phase)
             target = self.p_nominal_by_leg[leg_name].copy()
             target[0] += x_offset
@@ -315,7 +308,7 @@ class Go2FootPositionController(Go2StandController):
         foot_world = foot_body_pos + foot_body_rot @ FOOT_OFFSET
         return base_rot.T @ (foot_world - base_pos)
 
-    def actual_foot_map(self) -> list[tuple[str, np.ndarry]]:
+    def actual_foot_map(self) -> list[tuple[str, np.ndarray]]:
         return [(leg_name, self.actual_foot_position(leg_name)) for leg_name in LEG_NAMES]
 
     def foot_error_map(self) -> list[tuple[str, np.ndarray]]:
@@ -330,23 +323,9 @@ class Go2FootPositionController(Go2StandController):
             lines.append(
                 f"{leg_name} p_des={np.round(p_des, 4)} "
                 f"p_actual={np.round(p_actual, 4)} "
-                    f"err={np.round(error, 4)}"
+                f"err={np.round(error, 4)}"
             )
         return "\n".join(lines)
-
-    def contact_state(self) -> dict[str, tuple[float, bool]]:
-        force_buf = np.zeros(6, type=float)
-        normal_force_by_leg = {leg_name: 0.0 for leg_name in LEG_NAMES}
-        for i in range(self.data.ncon):
-            contact = self.data.contact[i]
-            leg = self.geom_id_to_leg.get(int(contact.geom1)) or self.geom_id_to_leg.get(int(contact.geom2))
-            if leg is None:
-                continue
-            mujoco.mj_contactForce(self.model, self.data, i, force_buf)
-            normal_force_by_leg[leg] += float(force_buf[0])
-        return {
-            leg_name: (force, force > CONTACT_FORCE_THRESHOLD) for leg_name, force in normal_force_by_leg.items()
-        }
 
     def contact_state(self) -> dict[str, tuple[float, bool]]:
         force_buf = np.zeros(6, dtype=float)
@@ -440,7 +419,7 @@ def run_viewer_foot_control(
             if print_tau_every > 0 and controller.step_count % print_tau_every == 0:
                 print(f"t={data.time:.3f} tau: {controller.format_torque_map()}")
             if print_foot_every > 0 and controller.step_count % print_foot_every == 0:
-                print(f"foot tracking t={data.time: .3f}")
+                print(f"foot tracking t={data.time:.3f}")
                 print(controller.format_foot_tracking())
             if print_contact_every > 0 and controller.step_count % print_contact_every == 0:
                 print(f"contact t={data.time:.3f} {controller.format_contact_state()}")
@@ -449,14 +428,14 @@ def run_viewer_foot_control(
             if sleep_time > 0.0:
                 time.sleep(min(sleep_time, 0.01))
 
-def main() ->None:
+def main() -> None:
     parser = argparse.ArgumentParser(description="Run the Go2 foot-position controller using IK + joint PD")
     parser.add_argument("--headless", action="store_true", help="Run without opening the viewer.")
     parser.add_argument("--duration", type=float, default=5.0, help="Headless run duration in seconds.")
     parser.add_argument("--offset-foot", nargs=4, metavar=("LEG", "DX", "DY", "DZ"), help="Apply a base-frame foot offset in meters, for example: --offset-foot FL 0.01 0 0",)
     parser.add_argument("--print-tau-every", type=int, default=0, help="Print torque command every N control steps. 0 disables repeated print.")
 
-    parser.add_argument("--print-foot-every", type=int, default=0, help="Print foot trakcing error every N control steps. 0 disables repeated printing")
+    parser.add_argument("--print-foot-every", type=int, default=0, help="Print foot tracking error every N control steps. 0 disables repeated printing")
 
     parser.add_argument("--lift-foot", choices=LEG_NAMES, help="Move one foot target up and down with a smooth cosine trajectory.", )
 
@@ -464,20 +443,20 @@ def main() ->None:
 
     parser.add_argument("--lift-frequency", type=float, default=0.5, help="Lift frequency in Hz for --lift-foot.",)
 
-    parser.add_argument("--swing-foot", choices=LEG_NAMES, help="Move one foot target in z and z with a smooth perioodic swing trajectory")
+    parser.add_argument("--swing-foot", choices=LEG_NAMES, help="Move one foot target in x and z with a smooth periodic swing trajectory")
 
     parser.add_argument("--swing-length", type=float, default=0.04, help="Peak-to-peak swing length in meters for --swing-foot.")
     parser.add_argument("--swing-diagonal", choices=sorted(DIAGONAL_PAIRS), help="Move a diagonal foot pair with the same x-z swing trajectory.")
 
-    parser.add_argument("--no-stabilize-body", action="store_false", help="Disable simple roll/pitch foot-placement stabilization.")
+    parser.add_argument("--no-stabilize-body", action="store_true", help="Disable simple roll/pitch foot-placement stabilization.")
 
-    parser.add_argument("--alternate-diagonal", action="store_true", help="Alternate the swing phase between FL+RR and FR +RL.")
+    parser.add_argument("--alternate-diagonal", action="store_true", help="Alternate the swing phase between FL+RR and FR+RL.")
 
     parser.add_argument("--trot-forward", action="store_true", help="Run an open-loop forward trot with swing and stance foot motion")
 
     parser.add_argument("--step-length", type=float, default=0.03, help="Peak-to-peak x motion in meters for --trot-forward")
 
-    parser.add_argument("--step-height", type=float, default=0.015, help="Foot lift height in meters fro --trot-forward")
+    parser.add_argument("--step-height", type=float, default=0.015, help="Foot lift height in meters for --trot-forward")
 
     parser.add_argument("--gait-frequency", type=float, default=0.25, help="Gait cycle frequency in Hz for --trot-forward")
 
@@ -505,7 +484,6 @@ def main() ->None:
     if args.offset_foot is not None:
         leg_name, dx, dy, dz = args.offset_foot
         controller.offset_desired_foot_position(leg_name, np.array([float(dx), float(dy), float(dz)], dtype=float),)
-        controller.reset()
 
     if args.lift_foot is not None:
         controller.configure_lift_motion(
@@ -522,14 +500,14 @@ def main() ->None:
             args.lift_frequency,
         )
     if args.swing_diagonal is not None:
-        controller.configure_diagnal_swing_motion(
+        controller.configure_diagonal_swing_motion(
             args.swing_diagonal,
             args.swing_length,
             args.lift_amplitude,
             args.lift_frequency,
         )
     if args.alternate_diagonal:
-        controller.configue_alternating_diangonal_swing(
+        controller.configure_alternating_diagonal_swing(
             args.swing_length,
             args.lift_amplitude,
             args.lift_frequency,
@@ -539,6 +517,8 @@ def main() ->None:
                                           args.step_height,
                                           args.gait_frequency,
                                           args.swing_fraction)
+
+    controller.reset()
 
     print("Go2 actual foot position (p_actual in base frame):")
     for leg_name, foot_position in controller.actual_foot_map():
@@ -550,21 +530,19 @@ def main() ->None:
     for leg_name, foot_position in controller.desired_foot_map():
         print(f" {leg_name}: {np.round(foot_position, 4)}")
 
-    print("Go2 foot trakcing error (p_des - p_actual): ")
+    print("Go2 foot tracking error (p_des - p_actual): ")
     for leg_name, error in controller.foot_error_map():
         print(f"{leg_name}: {np.round(error, 4)}")
 
     print("Go2 initial torque command (tau):")
 
     for joint_name, tau_value in controller.torque_map():
-        print(f" {joint_name}: {tau_value:4f}")
+        print(f" {joint_name}: {tau_value:.4f}")
 
     if args.headless:
-        # run_headless(model, data, controller, args.duration)
         run_headless_foot_control(model, data, controller, args.duration, args.print_foot_every, args.print_contact_every,)
     else:
         run_viewer_foot_control(model, data, controller, args.print_tau_every, args.print_foot_every, args.print_base_every, args.print_contact_every,)
 
 if __name__ == "__main__":
     main()
-
