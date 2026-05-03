@@ -32,7 +32,14 @@ FOOT_BODIES = {
     "RL": "RL_calf",
     "RR": "RR_calf",
 }
+FOOT_GEOMS = {
+    "FL": "FL",
+    "FR": "FR",
+    "RL": "RL",
+    "RR": "RR",
+}
 FOOT_OFFSET = np.array([-0.002, 0.0, -0.213], dtype=float)
+CONTACT_FORCE_THRESHOLD = 5.0
 
 class Go2FootPositionController(Go2StandController):
     def __init__(self, model: mujoco.MjModel, data: mujoco.MjData) -> None:
@@ -42,6 +49,10 @@ class Go2FootPositionController(Go2StandController):
             leg_name: mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, FOOT_BODIES[leg_name])
             for leg_name in LEG_NAMES
         }
+        self.foot_geom_ids = {
+            leg_name: mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, FOOT_BODIES[leg_name]) for leg_name in LEG_NAMES
+        }
+        self.geom_id_to_leg = {geom_id: leg for leg, geom_id in self.foot_geom_ids.items()}
         print(f"self.base_body_id {self.base_body_id}")
         for leg_name in self.foot_body_ids:
             print(f"{leg_name} verse: {self.foot_body_ids[leg_name]}")
@@ -323,11 +334,52 @@ class Go2FootPositionController(Go2StandController):
             )
         return "\n".join(lines)
 
+    def contact_state(self) -> dict[str, tuple[float, bool]]:
+        force_buf = np.zeros(6, type=float)
+        normal_force_by_leg = {leg_name: 0.0 for leg_name in LEG_NAMES}
+        for i in range(self.data.ncon):
+            contact = self.data.contact[i]
+            leg = self.geom_id_to_leg.get(int(contact.geom1)) or self.geom_id_to_leg.get(int(contact.geom2))
+            if leg is None:
+                continue
+            mujoco.mj_contactForce(self.model, self.data, i, force_buf)
+            normal_force_by_leg[leg] += float(force_buf[0])
+        return {
+            leg_name: (force, force > CONTACT_FORCE_THRESHOLD) for leg_name, force in normal_force_by_leg.items()
+        }
+
+    def contact_state(self) -> dict[str, tuple[float, bool]]:
+        force_buf = np.zeros(6, dtype=float)
+        normal_force_by_leg = {leg_name: 0.0 for leg_name in LEG_NAMES}
+        for i in range(self.data.ncon):
+            contact = self.data.contact[i]
+            leg = self.geom_id_to_leg.get(int(contact.geom1)) or self.geom_id_to_leg.get(int(contact.geom2))
+            if leg is None:
+                continue
+            mujoco.mj_contactForce(self.model, self.data, i, force_buf)
+            normal_force_by_leg[leg] += float(force_buf[0])
+
+        return {
+            leg_name: (force, force > CONTACT_FORCE_THRESHOLD) for leg_name, force in normal_force_by_leg.items()
+        }
+
+    def format_contact_state(self) -> str:
+        state = self.contact_state()
+        parts = []
+        for leg_name in LEG_NAMES:
+            force, in_contact = state[leg_name]
+            flag = "stance" if in_contact else "swing "
+            parts.append(f"{leg_name} {flag} fn={force:6.2f}N")
+        return "  ".join(parts)
+
+
+
 def run_headless_foot_control(model: mujoco.MjModel,
                               data: mujoco.MjData,
                               controller: Go2FootPositionController,
                               duration: float,
-                              print_foot_every: int,) -> None:
+                              print_foot_every: int,
+                              print_contact_every: int,) -> None:
     steps = int(duration / model.opt.timestep)
     min_height = float("inf")
     start_xy = data.qpos[0:2].copy()
@@ -347,6 +399,9 @@ def run_headless_foot_control(model: mujoco.MjModel,
             print(f"foot tracking t={data.time:.3f}")
             print(controller.format_foot_tracking())
 
+        if print_contact_every > 0 and controller.step_count % print_contact_every == 0:
+            print(f"contact t={data.time:.3f} {controller.format_contact_state()}")
+
     displacement_xy = data.qpos[0:2] - start_xy
     print(
         f"done duration={data.time:.2f} "
@@ -361,6 +416,7 @@ def run_viewer_foot_control(
     print_tau_every: int,
     print_foot_every: int,
     print_base_every: int,
+    print_contact_every: int,
 ) -> None:
     with mujoco.viewer.launch_passive(model, data) as viewer:
         viewer.cam.distance = 1.5
@@ -386,6 +442,8 @@ def run_viewer_foot_control(
             if print_foot_every > 0 and controller.step_count % print_foot_every == 0:
                 print(f"foot tracking t={data.time: .3f}")
                 print(controller.format_foot_tracking())
+            if print_contact_every > 0 and controller.step_count % print_contact_every == 0:
+                print(f"contact t={data.time:.3f} {controller.format_contact_state()}")
             viewer.sync()
             sleep_time = (data.time - sim_start) - (time.perf_counter() - wall_start)
             if sleep_time > 0.0:
@@ -424,6 +482,8 @@ def main() ->None:
     parser.add_argument("--gait-frequency", type=float, default=0.25, help="Gait cycle frequency in Hz for --trot-forward")
 
     parser.add_argument("--swing-fraction", type=float, default=0.5, help="Fraction of each gait cycle spent in swing for --trot-forward.")
+
+    parser.add_argument("--print-contact-every", type=int, default=0, help="Print per-foot contact normal force every N control steps. 0 disables",)
 
     parser.add_argument(
         "--print-base-every",
@@ -501,9 +561,9 @@ def main() ->None:
 
     if args.headless:
         # run_headless(model, data, controller, args.duration)
-        run_headless_foot_control(model, data, controller, args.duration, args.print_foot_every)
+        run_headless_foot_control(model, data, controller, args.duration, args.print_foot_every, args.print_contact_every,)
     else:
-        run_viewer_foot_control(model, data, controller, args.print_tau_every, args.print_foot_every, args.print_base_every)
+        run_viewer_foot_control(model, data, controller, args.print_tau_every, args.print_foot_every, args.print_base_every, args.print_contact_every,)
 
 if __name__ == "__main__":
     main()
